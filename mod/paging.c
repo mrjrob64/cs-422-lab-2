@@ -18,6 +18,14 @@ do_fault(struct vm_area_struct * vma,
          unsigned long           fault_address)
 {
     printk(KERN_INFO "paging_vma_fault() invoked: took a page fault at VA 0x%lx\n", fault_address);
+    struct page * new_page = alloc_pages(GFP_KERNEL);
+    unsigned long pfn = page_to_pfn(new_page);
+    unsigned long page_aligned_address = PAGE_ALIGN(fault_address);
+
+    if(!remap_pfn_range(vma, unsigned long vaddr, pfn, PAGE_SIZE, vma->vm_page_root))
+    {
+        //do something we wanna make sure the page isn't freed if it isn't allocated maybe
+    }
     return VM_FAULT_SIGBUS;
 }
 
@@ -34,12 +42,21 @@ static void
 paging_vma_open(struct vm_area_struct * vma)
 {
     printk(KERN_INFO "paging_vma_open() invoked\n");
+    physical_mem_tracker_t * pointer = (physical_mem_tracker_t *) vma->private_data;
+    atomic_add(&pointer->ref_counter, 1);
+
 }
 
 static void
 paging_vma_close(struct vm_area_struct * vma)
 {
     printk(KERN_INFO "paging_vma_close() invoked\n");
+    physical_mem_tracker_t * pointer = (physical_mem_tracker_t *) vma->private_data;
+    atomic_dec(&pointer->ref_counter, 1);
+    if(atomic_read(&pointer->ref_counter) == 0)
+    {
+        kfree(pointer);
+    }
 }
 
 static struct vm_operations_struct
@@ -63,6 +80,10 @@ paging_mmap(struct file           * filp,
 
     /* setup the vma->vm_ops, so we can catch page faults */
     vma->vm_ops = &paging_vma_ops;
+    
+    //initialize vma private_data struct
+    vma->private_data = (physical_mem_tracker_t *) kmalloc(sizeof(physical_mem_tracker_t), GFP_KERNEL);
+    atomic_set(&vma->private_data->ref_counter, 1);
 
     printk(KERN_INFO "paging_mmap() invoked: new VMA for pid %d from VA 0x%lx to 0x%lx\n",
         current->pid, vma->vm_start, vma->vm_end);
