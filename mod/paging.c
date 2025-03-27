@@ -9,12 +9,17 @@
 #include <linux/slab.h>
 #include <linux/memory.h>
 #include <linux/mm.h>
+
 #include <paging.h>
  
 static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
 {
+    struct page * new_page;
+    unsigned long pfn;
+    unsigned long page_aligned_address;
+
     printk(KERN_INFO "paging_vma_fault() invoked: took a page fault at VA 0x%lx\n", fault_address);
-    struct page * new_page = alloc_page(GFP_KERNEL);
+    new_page = alloc_page(GFP_KERNEL);
  
     //checks for if memory allocation
     if(new_page == NULL) {
@@ -22,8 +27,8 @@ static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
         return VM_FAULT_OOM;
     }
  
-    unsigned long pfn = page_to_pfn(new_page);
-    unsigned long page_aligned_address = PAGE_ALIGN(fault_address);
+    pfn = page_to_pfn(new_page);
+    page_aligned_address = PAGE_ALIGN(fault_address);
  
     if(!remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
     {
@@ -43,17 +48,19 @@ static vm_fault_t paging_vma_fault(struct vm_fault * vmf)
  
 static void paging_vma_open(struct vm_area_struct * vma)
 {
+    physical_mem_tracker_t * pointer;
     printk(KERN_INFO "paging_vma_open() invoked\n");
-    physical_mem_tracker_t * pointer = (physical_mem_tracker_t *) vma->private_data;
-    atomic_add(&pointer->ref_counter, 1);
+    pointer = (physical_mem_tracker_t *) vma->vm_private_data;
+    atomic_add(1, &pointer->ref_counter);
  
 }
  
 static void paging_vma_close(struct vm_area_struct * vma)
 {
+    physical_mem_tracker_t * pointer;
     printk(KERN_INFO "paging_vma_close() invoked\n");
-    physical_mem_tracker_t * pointer = (physical_mem_tracker_t *) vma->private_data;
-    atomic_sub(&pointer->ref_counter, 1);
+    pointer = (physical_mem_tracker_t *) vma->vm_private_data;
+    atomic_sub(1, &pointer->ref_counter);
     if(atomic_read(&pointer->ref_counter) == 0)
     {
         kfree(pointer);
@@ -70,6 +77,8 @@ static struct vm_operations_struct paging_vma_ops =
 /* vma is the new virtual address segment for the process */
 static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
 {
+    physical_mem_tracker_t * tracker;
+    
     /* prevent Linux from mucking with our VMA (expanding it, merging it
      * with other VMAs, etc.)
      */
@@ -80,8 +89,9 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
     vma->vm_ops = &paging_vma_ops;
    
     //initialize vma private_data struct
-    vma->private_data = (physical_mem_tracker_t *) kmalloc(sizeof(physical_mem_tracker_t), GFP_KERNEL);
-    atomic_set(&vma->private_data->ref_counter, 1);
+    vma->vm_private_data = kmalloc(sizeof(physical_mem_tracker_t), GFP_KERNEL);
+    tracker = (physical_mem_tracker_t *) vma->vm_private_data;
+    atomic_set(&tracker->ref_counter, 1);
  
     printk(KERN_INFO "paging_mmap() invoked: new VMA for pid %d from VA 0x%lx to 0x%lx\n",
         current->pid, vma->vm_start, vma->vm_end);
