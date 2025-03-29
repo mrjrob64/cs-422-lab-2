@@ -9,9 +9,77 @@
 #include <linux/slab.h>
 #include <linux/memory.h>
 #include <linux/mm.h>
+#include <linux/atomic.h>
+#include <linux/list.h>
 
 #include <paging.h>
- 
+
+static atomic_t allocated_pages;
+static atomic_t freed_pages;
+
+static DEFINE_SPINLOCK(page_list_lock);
+
+typedef struct physical_mem_tracker
+{
+    atomic_t ref_counter;
+    struct list_head page_list;
+
+} physical_mem_tracker_t;
+
+typedef struct page_list
+{
+    struct page * page;
+    struct list_head list;
+
+} page_list_t;
+
+//TODO - add rm from page list
+// requires a way to lock this structure since it is global
+
+void rm_pages(struct vm_area_struct * vma)
+{
+    
+    physical_mem_tracker_t * tracker;
+    page_list_t * page_list;
+    page_list_t * tmp;
+
+    tracker = (physical_mem_tracker_t *) vma->vm_private_data;
+
+    spin_lock(&page_list_lock);
+
+    list_for_each_entry_safe(page_list, tmp, &tracker->page_list, list)
+    {
+	__free_page(page_list->page); 
+        list_del(&page_list->list);
+	kfree(page_list);
+	atomic_add(1, &freed_pages);
+    }
+
+    spin_unlock(&page_list_lock);
+}
+
+//TODO - add add to page list
+//requires a way to lock this structure since it is global
+
+void add_page(struct vm_area_struct * vma, struct page * page)
+{
+    page_list_t * page_list;
+    physical_mem_tracker_t * tracker;
+
+    printk(KERN_INFO "Adding page to list\n");
+
+    page_list = (page_list_t *) kmalloc(sizeof(page_list_t), GFP_KERNEL);
+    page_list->page = page;
+    tracker = (physical_mem_tracker_t *) vma->vm_private_data;
+
+    //in order to safely add must use lock
+    spin_lock(&page_list_lock);
+    list_add(&page_list->list, &tracker->page_list);
+    spin_unlock(&page_list_lock);
+
+    atomic_add(1, &allocated_pages);
+}
+
 static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
 {
     struct page * new_page;
@@ -29,12 +97,16 @@ static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
  
     pfn = page_to_pfn(new_page);
     page_aligned_address = PAGE_ALIGN(fault_address);
- 
-    if(!remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
+
+    printk(KERN_INFO "PAGE ALIGNED fault adress: 0x%lx\n", fault_address); 
+    if(remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
     {
         printk(KERN_INFO "remap_pfn_range failed\n");
         return VM_FAULT_SIGBUS;
     }
+
+    add_page(vma, new_page);
+
     return VM_FAULT_NOPAGE;
 }
  
@@ -54,7 +126,7 @@ static void paging_vma_open(struct vm_area_struct * vma)
     atomic_add(1, &pointer->ref_counter);
  
 }
- 
+
 static void paging_vma_close(struct vm_area_struct * vma)
 {
     physical_mem_tracker_t * pointer;
@@ -63,6 +135,8 @@ static void paging_vma_close(struct vm_area_struct * vma)
     atomic_sub(1, &pointer->ref_counter);
     if(atomic_read(&pointer->ref_counter) == 0)
     {
+	
+	rm_pages(vma);
         kfree(pointer);
     }
 }
@@ -92,7 +166,9 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
     vma->vm_private_data = kmalloc(sizeof(physical_mem_tracker_t), GFP_KERNEL);
     tracker = (physical_mem_tracker_t *) vma->vm_private_data;
     atomic_set(&tracker->ref_counter, 1);
- 
+
+    INIT_LIST_HEAD(&tracker->page_list);
+
     printk(KERN_INFO "paging_mmap() invoked: new VMA for pid %d from VA 0x%lx to 0x%lx\n",
         current->pid, vma->vm_start, vma->vm_end);
  
@@ -117,6 +193,9 @@ static int kmod_paging_init(void)
 {
     int status;
  
+    atomic_set(&allocated_pages, 0);
+    atomic_set(&freed_pages, 0);
+
     /* Create a character device to communicate with user-space via file I/O operations */
     status = misc_register(&dev_handle);
     if (status != 0) {
@@ -133,7 +212,7 @@ static void kmod_paging_exit(void)
 {
     /* Deregister our device file */
     misc_deregister(&dev_handle);
- 
+    printk("Freed Pages %d, Allocated Pages: %d\n", atomic_read(&freed_pages), atomic_read(&allocated_pages));
     printk(KERN_INFO "Unloaded kmod_paging module\n");
 }
  
