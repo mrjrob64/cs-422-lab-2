@@ -16,6 +16,8 @@
 
 static atomic_t allocated_pages;
 static atomic_t freed_pages;
+static unsigned int demand_paging = 1;
+module_param(demand_paging, uint, 0644)
 
 static DEFINE_SPINLOCK(page_list_lock);
 
@@ -33,9 +35,14 @@ typedef struct page_list
 
 } page_list_t;
 
+
+
+
+
 //TODO - add rm from page list
 // requires a way to lock this structure since it is global
 
+//removes the pages and frees them
 void rm_pages(struct vm_area_struct * vma)
 {
     
@@ -80,6 +87,53 @@ void add_page(struct vm_area_struct * vma, struct page * page)
     atomic_add(1, &allocated_pages);
 }
 
+static int pp(struct vm_area_struct * vma)
+{
+    struct page * new_page;
+    unsigned pfn; 
+    unsigned page_aligned_address;
+    unsigned long start_address, end_address;
+    unsigned int numPages;
+    int i;
+
+    //find the # of pages we need to allocate
+    start_address = vma->vm_start;
+    end_address = vma->vm_end;
+
+    numPages = (end_address - start_address) / PAGE_SIZE;
+
+    //allocates and maps one page at a time
+    for(i = 0; i < numPages; i++) {
+        
+        //allocates page
+        new_page = alloc_page(GFP_KERNEL);
+        
+        //checks for if memory allocation fails
+        if(new_page == NULL) {
+            printk(KERN_INFO "page memory allocation failed\n");
+            return VM_FAULT_OOM;
+        }
+
+        pfn = page_to_pfn(new_page);
+        fault_address  = start_address + (i * page_size);
+        page_aligned_address = PAGE_ALIGN(fault_address);
+
+        //checks for remapping failed / other errors
+        if(remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
+        {
+            printk(KERN_INFO "remap_pfn_range failed\n");
+            return VM_FAULT_SIGBUS;
+        }
+
+        //finds the physical memory to add
+        add_page(vma, new_page);  
+    }
+
+    return VM_FAULT_NOPAGE;
+
+}
+
+
 static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
 {
     struct page * new_page;
@@ -115,7 +169,11 @@ static vm_fault_t paging_vma_fault(struct vm_fault * vmf)
     struct vm_area_struct * vma = vmf->vma;
     unsigned long fault_address = (unsigned long)vmf->address;
  
-    return do_fault(vma, fault_address);
+    if(demand_paging) {   
+        return do_fault(vma, fault_address);
+    } else {
+        return VM_FAULT_NOPAGE;
+    }
 }
  
 static void paging_vma_open(struct vm_area_struct * vma)
@@ -172,6 +230,9 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
     printk(KERN_INFO "paging_mmap() invoked: new VMA for pid %d from VA 0x%lx to 0x%lx\n",
         current->pid, vma->vm_start, vma->vm_end);
  
+    if(!demand_paging) {
+        return pp(vma);
+    }
     return 0;
 }
  
