@@ -14,10 +14,12 @@
 
 #include <paging.h>
 
+#define PPAGE_MMAP_SUCCESS 0
+
 static atomic_t allocated_pages;
 static atomic_t freed_pages;
 static unsigned int demand_paging = 1;
-module_param(demand_paging, uint, 0644)
+module_param(demand_paging, uint, 0644);
 
 static DEFINE_SPINLOCK(page_list_lock);
 
@@ -91,16 +93,21 @@ static int pp(struct vm_area_struct * vma)
 {
     struct page * new_page;
     unsigned pfn; 
-    unsigned page_aligned_address;
     unsigned long start_address, end_address;
+    unsigned long lower_aligned_start_address, upper_aligned_end_address;
     unsigned int numPages;
+    unsigned long fault_address_aligned;
     int i;
 
     //find the # of pages we need to allocate
     start_address = vma->vm_start;
     end_address = vma->vm_end;
 
-    numPages = (end_address - start_address) / PAGE_SIZE;
+    lower_aligned_start_address = start_address & PAGE_MASK;
+    upper_aligned_end_address = PAGE_ALIGN(end_address);
+
+    //lower address rounded down and upper address rounded up
+    numPages = (upper_aligned_end_address - lower_aligned_start_address) / PAGE_SIZE;
 
     //allocates and maps one page at a time
     for(i = 0; i < numPages; i++) {
@@ -115,11 +122,10 @@ static int pp(struct vm_area_struct * vma)
         }
 
         pfn = page_to_pfn(new_page);
-        fault_address  = start_address + (i * page_size);
-        page_aligned_address = PAGE_ALIGN(fault_address);
+        fault_address_aligned  = lower_aligned_start_address + (i * PAGE_SIZE);
 
         //checks for remapping failed / other errors
-        if(remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
+        if(remap_pfn_range(vma, fault_address_aligned, pfn, PAGE_SIZE, vma->vm_page_prot))
         {
             printk(KERN_INFO "remap_pfn_range failed\n");
             return VM_FAULT_SIGBUS;
@@ -150,7 +156,7 @@ static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
     }
  
     pfn = page_to_pfn(new_page);
-    page_aligned_address = PAGE_ALIGN(fault_address);
+    page_aligned_address = PAGE_MASK & fault_address;
 
     printk(KERN_INFO "PAGE ALIGNED fault adress: 0x%lx\n", fault_address); 
     if(remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
@@ -209,6 +215,7 @@ static struct vm_operations_struct paging_vma_ops =
 /* vma is the new virtual address segment for the process */
 static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
 {
+    int pp_ret_address;
     physical_mem_tracker_t * tracker;
     
     /* prevent Linux from mucking with our VMA (expanding it, merging it
@@ -231,7 +238,19 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
         current->pid, vma->vm_start, vma->vm_end);
  
     if(!demand_paging) {
-        return pp(vma);
+        pp_ret_address = pp(vma);
+	switch(pp_ret_address)
+        {
+	     case VM_FAULT_OOM:
+	         return -ENOMEM;
+	     case VM_FAULT_NOPAGE:
+		 return PPAGE_MMAP_SUCCESS;
+	     case VM_FAULT_SIGBUS:
+		 return -EFAULT;
+	     default:
+		 printk(KERN_ALERT "Unexpected Return Value pp function!\n");
+		 return PPAGE_MMAP_SUCCESS;
+        }
     }
     return 0;
 }
