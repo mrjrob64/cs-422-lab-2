@@ -29,6 +29,7 @@
 
 #include <paging.h>
 #define PAGE_SIZE sysconf(_SC_PAGESIZE)
+#define ONESEC_INMICROSEC 1000000
 
 const int num_expected_args = 2;
 const unsigned sqrt_of_UINT32_MAX = 65536;
@@ -51,12 +52,27 @@ mmap_malloc(int    fd,
     //return malloc(bytes);
 }
 
+void print_time_diff(struct timeval * start, struct timeval * end)
+{
+    time_t tv_sec_diff = (*end).tv_sec - (*start).tv_sec;
+    suseconds_t tv_usec_diff = (*end).tv_usec - (*start).tv_usec;
+
+    if(tv_usec_diff < 0)
+    {
+        tv_usec_diff += ONESEC_INMICROSEC;
+	tv_sec_diff--;
+    }
+
+    printf("Time Diff: %ld.%06ld\n", (long)tv_sec_diff, (long)tv_usec_diff);
+}
+
 int main (int argc, char* argv[])
 {
     int fd;
 	unsigned index, row, col; //loop indicies
 	unsigned matrix_size, squared_size;
 	double *A, *B, *C;
+	struct timeval tv_start, tv_end;
 
 	if (argc != num_expected_args) {
 		printf("Usage: ./dense_mm <size of matrices>\n");
@@ -77,11 +93,17 @@ int main (int argc, char* argv[])
     }
 
 	squared_size = matrix_size * matrix_size;
-
+    
+    gettimeofday(&tv_start, NULL); 
     A = (double *)mmap_malloc(fd, sizeof(double) * squared_size);
     B = (double *)mmap_malloc(fd, sizeof(double) * squared_size);
     C = (double *)mmap_malloc(fd, sizeof(double) * squared_size);
+    gettimeofday(&tv_end, NULL);
 
+    printf("Time for mmap (all 3 matricies):\n");
+    print_time_diff(&tv_start, &tv_end);
+
+    gettimeofday(&tv_start, NULL);
 	for (row = 0; row < matrix_size; row++) {
 		for (col = 0; col < matrix_size; col++) {
 			for (index = 0; index < matrix_size; index++){
@@ -89,8 +111,11 @@ int main (int argc, char* argv[])
 			}	
 		}
 	}
-
+    gettimeofday(&tv_end, NULL);
+    
     printf("Multiplication done\n");
+    printf("Time for matrix multiplication:\n");
+    print_time_diff(&tv_start, &tv_end);
 
     return 0;
 }
