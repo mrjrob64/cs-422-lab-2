@@ -63,7 +63,7 @@ void rm_pages(struct vm_area_struct * vma)
     spin_unlock(&page_list_lock);
 }
 
-//requires a way to lock this structure since it is global
+//adds the page to the virtual memory space
 void add_page(struct vm_area_struct * vma, struct page * page)
 {
     page_list_t * page_list;
@@ -83,6 +83,7 @@ void add_page(struct vm_area_struct * vma, struct page * page)
     atomic_add(1, &allocated_pages);
 }
 
+//pre-paging function
 static int pp(struct vm_area_struct * vma)
 {
     struct page * new_page;
@@ -124,8 +125,6 @@ static int pp(struct vm_area_struct * vma)
             printk(KERN_INFO "remap_pfn_range failed\n");
             return VM_FAULT_SIGBUS;
         }
-
-        //finds the physical memory to add
         add_page(vma, new_page);  
     }
 
@@ -133,7 +132,7 @@ static int pp(struct vm_area_struct * vma)
 
 }
 
-
+//Demand Paging function
 static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
 {
     struct page * new_page;
@@ -143,27 +142,29 @@ static int do_fault(struct vm_area_struct * vma, unsigned long fault_address)
     printk(KERN_INFO "paging_vma_fault() invoked: took a page fault at VA 0x%lx\n", fault_address);
     new_page = alloc_page(GFP_KERNEL);
  
-    //checks for if memory allocation
+    //checks for if memory allocation fails
     if(new_page == NULL) {
         printk(KERN_INFO "page memory allocation failed\n");
         return VM_FAULT_OOM;
     }
- 
+
+   //aligns and
     pfn = page_to_pfn(new_page);
     page_aligned_address = PAGE_MASK & fault_address;
 
+    //checks for remapping failed / other errors
     printk(KERN_INFO "PAGE ALIGNED fault adress: 0x%lx\n", fault_address); 
     if(remap_pfn_range(vma, page_aligned_address, pfn, PAGE_SIZE, vma->vm_page_prot))
     {
         printk(KERN_INFO "remap_pfn_range failed\n");
         return VM_FAULT_SIGBUS;
     }
-
     add_page(vma, new_page);
 
     return VM_FAULT_NOPAGE;
 }
- 
+
+//fault function
 static vm_fault_t paging_vma_fault(struct vm_fault * vmf)
 {
     struct vm_area_struct * vma = vmf->vma;
@@ -175,7 +176,8 @@ static vm_fault_t paging_vma_fault(struct vm_fault * vmf)
         return VM_FAULT_NOPAGE;
     }
 }
- 
+
+//open paging function
 static void paging_vma_open(struct vm_area_struct * vma)
 {
     physical_mem_tracker_t * tracker;
@@ -185,6 +187,7 @@ static void paging_vma_open(struct vm_area_struct * vma)
  
 }
 
+//freeing/closing paging function
 static void paging_vma_close(struct vm_area_struct * vma)
 {
     physical_mem_tracker_t * tracker;
@@ -198,7 +201,8 @@ static void paging_vma_close(struct vm_area_struct * vma)
         kfree(tracker);
     }
 }
- 
+
+//Different vma operations that are defined
 static struct vm_operations_struct paging_vma_ops =
 {
     .fault = paging_vma_fault,
@@ -230,9 +234,12 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
 
     printk(KERN_INFO "paging_mmap() invoked: new VMA for pid %d from VA 0x%lx to 0x%lx\n",
         current->pid, vma->vm_start, vma->vm_end);
- 
+    
+    //checks for demand paging or pre-paging
     if(!demand_paging) {
         pp_ret_address = pp(vma);
+
+	//looks at the return value and switches the appropriate value
 	switch(pp_ret_address)
         {
 	     case VM_FAULT_OOM:
@@ -248,12 +255,14 @@ static int paging_mmap(struct file * filp, struct vm_area_struct * vma)
     }
     return 0;
 }
- 
+
+//Defines the file operations
 static struct file_operations dev_ops =
 {
     .mmap = paging_mmap,
 };
- 
+
+//Miscelleanous device structure parts
 static struct miscdevice dev_handle =
 {
     .minor = MISC_DYNAMIC_MINOR,
@@ -297,3 +306,4 @@ module_exit(kmod_paging_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jeremy Robin and Shawn Fong");
 MODULE_DESCRIPTION("Module to handle page allocation and virtual memory.");
+//Emails: f.shawn@wustl.edu & j.i.robin@wustl.edu
