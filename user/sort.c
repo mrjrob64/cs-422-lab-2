@@ -29,7 +29,7 @@
 
 #include <paging.h>
 #define PAGE_SIZE sysconf(_SC_PAGESIZE)
-
+#define ONESEC_INMICROSEC 1000000
 const int num_expected_args = 2;
 
 static void *
@@ -48,6 +48,20 @@ mmap_malloc(int    fd,
     return data;
 
     //return malloc(bytes);
+}
+
+void print_time_diff(struct timeval * start, struct timeval * end)
+{
+    time_t tv_sec_diff = (*end).tv_sec - (*start).tv_sec;
+    suseconds_t tv_usec_diff = (*end).tv_usec - (*start).tv_usec;
+
+    if(tv_usec_diff < 0)
+    {
+        tv_usec_diff += ONESEC_INMICROSEC;
+        tv_sec_diff--;
+    }
+
+    printf("Time Diff: %ld.%06ld\n", (long)tv_sec_diff, (long)tv_usec_diff);
 }
 
 // Uncomment the following #define statement to turn on verification that the
@@ -119,6 +133,7 @@ int main( int argc, char* argv[] ){
 	unsigned array_size;
 	double *A;
 	int fd;
+	struct timeval tv_start, tv_end;
 
 	fd = open(DEV_NAME, O_RDWR);
     	if (fd == -1) {
@@ -134,15 +149,31 @@ int main( int argc, char* argv[] ){
 	array_size = atoi(argv[1]);
 	
 	printf("Generating array...\n");
-	A = (double*) mmap_malloc(fd, sizeof(double) * array_size );
 
+	gettimeofday(&tv_start, NULL);
+	A = (double*) mmap_malloc(fd, sizeof(double) * array_size );
+	gettimeofday(&tv_end, NULL);
+
+    	printf("Time for mmap (allocating space for array):\n");
+    	print_time_diff(&tv_start, &tv_end);
+
+	gettimeofday(&tv_start, NULL);
 	for( index = 0; index < array_size; index++ ){
 		A[index] = (double) rand();
 	}
+	gettimeofday(&tv_end, NULL);
+
+        printf("Time for filling arrays with random values:\n");
+        print_time_diff(&tv_start, &tv_end);
 
 	printf("Sorting array...\n");
 
+	gettimeofday(&tv_start, NULL);
 	quicksort( A, 0, array_size);
+	gettimeofday(&tv_end, NULL);
+
+        printf("Time for sorting arrays:\n");
+        print_time_diff(&tv_start, &tv_end);
 
 	#ifdef VERIFY_CORRECT
 	printf("Verifying array is sorted...\n");

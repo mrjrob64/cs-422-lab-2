@@ -38,12 +38,6 @@ typedef struct page_list
 } page_list_t;
 
 
-
-
-
-//TODO - add rm from page list
-// requires a way to lock this structure since it is global
-
 //removes the pages and frees them
 void rm_pages(struct vm_area_struct * vma)
 {
@@ -54,10 +48,12 @@ void rm_pages(struct vm_area_struct * vma)
 
     tracker = (physical_mem_tracker_t *) vma->vm_private_data;
 
+    //in order to safely remove the pages must use a lock
     spin_lock(&page_list_lock);
 
     list_for_each_entry_safe(page_list, tmp, &tracker->page_list, list)
     {
+	// free page, delete element, free element, add 1 to freed pages
 	__free_page(page_list->page); 
         list_del(&page_list->list);
 	kfree(page_list);
@@ -67,9 +63,7 @@ void rm_pages(struct vm_area_struct * vma)
     spin_unlock(&page_list_lock);
 }
 
-//TODO - add add to page list
 //requires a way to lock this structure since it is global
-
 void add_page(struct vm_area_struct * vma, struct page * page)
 {
     page_list_t * page_list;
@@ -184,24 +178,24 @@ static vm_fault_t paging_vma_fault(struct vm_fault * vmf)
  
 static void paging_vma_open(struct vm_area_struct * vma)
 {
-    physical_mem_tracker_t * pointer;
+    physical_mem_tracker_t * tracker;
     printk(KERN_INFO "paging_vma_open() invoked\n");
-    pointer = (physical_mem_tracker_t *) vma->vm_private_data;
-    atomic_add(1, &pointer->ref_counter);
+    tracker = (physical_mem_tracker_t *) vma->vm_private_data;
+    atomic_add(1, &tracker->ref_counter);
  
 }
 
 static void paging_vma_close(struct vm_area_struct * vma)
 {
-    physical_mem_tracker_t * pointer;
+    physical_mem_tracker_t * tracker;
     printk(KERN_INFO "paging_vma_close() invoked\n");
-    pointer = (physical_mem_tracker_t *) vma->vm_private_data;
-    atomic_sub(1, &pointer->ref_counter);
-    if(atomic_read(&pointer->ref_counter) == 0)
+    tracker = (physical_mem_tracker_t *) vma->vm_private_data;
+    atomic_sub(1, &tracker->ref_counter);
+    if(atomic_read(&tracker->ref_counter) == 0)
     {
 	
 	rm_pages(vma);
-        kfree(pointer);
+        kfree(tracker);
     }
 }
  
@@ -301,5 +295,5 @@ module_exit(kmod_paging_exit);
  
 /* Misc module info */
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Who are you?");
-MODULE_DESCRIPTION("Please describe this module.");
+MODULE_AUTHOR("Jeremy Robin and Shawn Fong");
+MODULE_DESCRIPTION("Module to handle page allocation and virtual memory.");
